@@ -1,0 +1,110 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en" lang="en">
+    <head>
+        <meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
+        <title>Thomas Miedema - PostGIS: Stop trying to be helpful</title>
+        <link rel="stylesheet" type="text/css" href="./css/default.css" />
+        <link rel="stylesheet" type="text/css" href="./css/syntax.css" />
+        <link rel="stylesheet" type="text/css" href="./css/self.css" />
+    </head>
+    <body>
+        <div id="header">
+            <div id="logo">
+                <a href="./">Thomas Miedema</a>
+            </div>
+            <div id="navigation">
+                <a href="./">Home</a>
+                <a href="./about.html">About</a>
+                <a href="./contact.html">Contact</a>
+                <!--a href="/archive.html">Archive</a-->
+            </div>
+        </div>
+
+        <div id="content">
+            <h1>PostGIS: Stop trying to be helpful</h1>
+
+            <div class="info">
+    Posted on December 15, 2013
+    
+</div>
+
+<p>We will be using <a href="http://postgis.net/">PostGIS 2.0</a>.</p>
+<h3 id="part-1.-in-which-a-line-of-length-0-is-demoted-to-a-point.">Part 1. In which a line of length 0 is demoted to a point.</h3>
+<p>Enter a <code>linestring</code> with the same start- as endpoint (a loop).</p>
+<pre class="sourceCode sqlpostgresql"><code class="sourceCode sqlpostgresql">=&gt; <span class="kw">select</span> st_astext(
+    st_geomfromtext(<span class="st">'LINESTRING(1 0, 2 0, 1 0)'</span>));
+<span class="co">------------</span>
+LINESTRING(<span class="dv">1</span> <span class="dv">0</span>,<span class="dv">2</span> <span class="dv">0</span>,<span class="dv">1</span> <span class="dv">0</span>)</code></pre>
+<p><a href="http://www.postgis.org/docs/ST_Simplify.html"><code>st_simplify</code></a> reduces it to a <code>linestring</code> of length 0. It does not turn it into a <code>point</code>. So far so good.</p>
+<pre class="sourceCode sqlpostgresql"><code class="sourceCode sqlpostgresql">=&gt; <span class="kw">select</span> st_astext(
+    st_simplify(
+        st_geomfromtext(<span class="st">'LINESTRING(1 0, 2 0, 1 0)'</span>),
+        <span class="dv">100</span>));
+<span class="co">------------</span>
+LINESTRING(<span class="dv">1</span> <span class="dv">0</span>,<span class="dv">1</span> <span class="dv">0</span>)</code></pre>
+<p><a href="http://postgis.net/docs/ST_Line_Substring.html"><code>st_line_substring</code></a> however thinks it knows better.</p>
+<pre class="sourceCode sqlpostgresql"><code class="sourceCode sqlpostgresql">=&gt; <span class="kw">select</span> st_astext(
+    st_line_substring(
+        st_geomfromtext(<span class="st">'LINESTRING(1 0, 1 0)'</span>),
+        <span class="dv">0</span>,
+        <span class="dv">1</span>));
+<span class="co">------------</span>
+<span class="fu">POINT</span>(<span class="dv">1</span> <span class="dv">0</span>)</code></pre>
+<p><code>st_line_substring</code> also thinks it should return a point when <code>startfraction</code> equals <code>endfraction</code> on a regular <code>linestring</code>.</p>
+<pre class="sourceCode sqlpostgresql"><code class="sourceCode sqlpostgresql">=&gt; <span class="kw">select</span> st_astext(
+    st_line_substring(
+        st_geomfromtext(<span class="st">'LINESTRING(1 0, 2 0)'</span>),
+        <span class="dv">0</span>,
+        <span class="dv">0</span>));
+<span class="co">------------</span>
+<span class="fu">POINT</span>(<span class="dv">1</span> <span class="dv">0</span>)</code></pre>
+<p>This is wrong. Don’t change the dimensions of my <code>geometries</code> without my explicit consent. If I want a <code>point</code>, I’ll use <a href="http://www.postgis.org/docs/ST_StartPoint.html"><code>st_startpoint</code></a>, <a href="http://www.postgis.org/docs/ST_EndPoint.html"><code>st_endpoint</code></a>, <a href="http://www.postgis.org/docs/ST_Line_Interpolate_Point.html"><code>st_line_interpolate_point</code></a> or some other function that returns a point. <code>st_line_substring</code> should return a <code>linestring</code>. Always. Especially, since a mixed collection of <code>point</code>s and <code>linestring</code>s is treated differently from a collection of only <code>linestring</code>s.</p>
+<h3 id="part-2.-the-point-is-not-a-line.">Part 2. The point is not a line.</h3>
+<p>When <a href="http://postgis.net/docs/ST_Collect.html"><code>st_collect</code></a> receives two <code>linestring</code>s it returns a <code>multilinestring</code>.</p>
+<pre class="sourceCode sqlpostgresql"><code class="sourceCode sqlpostgresql">=&gt; <span class="kw">select</span> st_astext(
+    st_collect(
+        st_geomfromtext(<span class="st">'LINESTRING(1 0, 2 0, 1 0)'</span>),
+        st_geomfromtext(<span class="st">'LINESTRING(1 0, 3 0)'</span>)));
+<span class="co">------------</span>
+MULTILINESTRING((<span class="dv">1</span> <span class="dv">0</span>,<span class="dv">2</span> <span class="dv">0</span>,<span class="dv">1</span> <span class="dv">0</span>),(<span class="dv">1</span> <span class="dv">0</span>,<span class="dv">3</span> <span class="dv">0</span>))</code></pre>
+<p>But when it receives a <code>point</code> and a <code>linestring</code>, instead of throwing an error, it decides to return a <code>geometrycollection</code>.</p>
+<pre class="sourceCode sqlpostgresql"><code class="sourceCode sqlpostgresql">=&gt; <span class="kw">select</span> st_astext(
+    st_collect(
+        st_geomfromtext(<span class="st">'POINT(1 0)'</span>),
+        st_geomfromtext(<span class="st">'LINESTRING(1 0, 3 0)'</span>)));
+<span class="co">------------</span>
+GEOMETRYCOLLECTION(<span class="fu">POINT</span>(<span class="dv">1</span> <span class="dv">0</span>),LINESTRING(<span class="dv">1</span> <span class="dv">0</span>,<span class="dv">3</span> <span class="dv">0</span>))</code></pre>
+<p>Although this behavior is <a href="http://postgis.net/docs/ST_Collect.html"><code>documented</code></a>, it’s still wrong. This should be two different functions. One that only accepts <code>geometries</code> of the same type and returns a <code>multi_*</code> of that type (and errors if the types are different). And one that accepts <code>geometries</code> of any type and always returns a <code>geometrycollection</code>. Stop this function-overloading-on-return-type madness. Especially since subsequent operations can depend on this return type.</p>
+<h3 id="part-3.-there-is-no-point.">Part 3. There is no point.</h3>
+<p><a href="http://postgis.net/docs/ST_LineMerge.html"><code>st_linemerge</code></a> is a useful function to merge a <code>multilinestring</code>.</p>
+<pre class="sourceCode sqlpostgresql"><code class="sourceCode sqlpostgresql">=&gt; <span class="kw">select</span> st_astext(
+    st_linemerge(
+        st_geomfromtext(
+            <span class="st">'MULTILINESTRING((1 0, 2 0), (2 0, 3 0))'</span>)));
+<span class="co">------------</span>
+LINESTRING(<span class="dv">1</span> <span class="dv">0</span>,<span class="dv">2</span> <span class="dv">0</span>,<span class="dv">3</span> <span class="dv">0</span>)</code></pre>
+<p>The <a href="http://postgis.net/docs/ST_LineMerge.html">documentation</a> says:</p>
+<blockquote>
+<p>“Only use with <code>multilinestring</code>/<code>linestring</code>s. If you feed a <code>polygon</code> or <code>geometrycollection</code> into this function, it will return an empty <code>geometrycollection</code>”</p>
+</blockquote>
+<p>Not so.</p>
+<pre class="sourceCode sqlpostgresql"><code class="sourceCode sqlpostgresql">=&gt; <span class="kw">select</span> st_astext(
+    st_linemerge(
+        st_geomfromtext(
+            <span class="st">'GEOMETRYCOLLECTION(</span>
+<span class="st">                LINESTRING(1 0, 2 0),</span>
+<span class="st">                POINT(27 42),</span>
+<span class="st">                LINESTRING(2 0, 3 0))'</span>)));
+<span class="co">------------</span>
+LINESTRING(<span class="dv">1</span> <span class="dv">0</span>,<span class="dv">2</span> <span class="dv">0</span>,<span class="dv">3</span> <span class="dv">0</span>)</code></pre>
+<p>It happily accepts a <code>geometrycollection</code> and ignores any <code>point</code>s that it contains.</p>
+<p>Maybe this can be convenient, maybe this sort of works most of the time, maybe this what other people want, but I want an error dammit. This stuff takes <em>forever</em> to debug.</p>
+<p>Postgis: Stop trying to be helpful, stop hiding my bugs.</p>
+
+        </div>
+        <div id="footer">
+            © 2013
+        </div>
+    </body>
+</html>
